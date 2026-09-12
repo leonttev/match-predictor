@@ -13,14 +13,9 @@ class PredictionEngineClient:
     def _client(self) -> httpx.AsyncClient:
         return httpx.AsyncClient(base_url=self._base_url, timeout=15.0)
 
-    async def compute_ratings(
-        self, matches: list[dict], initial_ratings: dict[str, float] | None = None
-    ) -> dict:
+    async def compute_ratings(self, matches: list[dict]) -> dict:
         async with self._client() as c:
-            r = await c.post(
-                "/ratings",
-                json={"matches": matches, "initial_ratings": initial_ratings or {}},
-            )
+            r = await c.post("/ratings", json={"matches": matches})
             r.raise_for_status()
             return r.json()
 
@@ -28,10 +23,8 @@ class PredictionEngineClient:
         self,
         team_a_rating: float,
         team_a_form: float,
-        team_a_tier: str,
         team_b_rating: float,
         team_b_form: float,
-        team_b_tier: str,
     ) -> dict:
         async with self._client() as c:
             r = await c.post(
@@ -39,10 +32,8 @@ class PredictionEngineClient:
                 json={
                     "team_a_rating": team_a_rating,
                     "team_a_form": team_a_form,
-                    "team_a_tier": team_a_tier,
                     "team_b_rating": team_b_rating,
                     "team_b_form": team_b_form,
-                    "team_b_tier": team_b_tier,
                 },
             )
             r.raise_for_status()

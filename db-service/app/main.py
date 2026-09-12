@@ -47,23 +47,14 @@ def upsert_team(team: schemas.TeamIn, session: Session = Depends(get_session)):
     if existing:
         existing.name = team.name
         existing.tag = team.tag
-        if team.seed_rating is not None:
-            existing.seed_rating = team.seed_rating
         session.commit()
         session.refresh(existing)
         return existing
 
-    # A brand-new team starts its displayed rating at its seed (falling back
-    # to the flat default) rather than always at 1500, so a team known to be
-    # strong doesn't look identical to an unknown one until it happens to
-    # play a match in the ingested window.
-    seed = team.seed_rating if team.seed_rating is not None else 1500.0
     row = models.Team(
         opendota_team_id=team.opendota_team_id,
         name=team.name,
         tag=team.tag,
-        seed_rating=seed,
-        rating=seed,
     )
     session.add(row)
     try:
@@ -101,16 +92,11 @@ def upsert_teams_bulk(teams: list[schemas.TeamIn], session: Session = Depends(ge
         if row:
             row.name = team.name
             row.tag = team.tag
-            if team.seed_rating is not None:
-                row.seed_rating = team.seed_rating
         else:
-            seed = team.seed_rating if team.seed_rating is not None else 1500.0
             row = models.Team(
                 opendota_team_id=team.opendota_team_id,
                 name=team.name,
                 tag=team.tag,
-                seed_rating=seed,
-                rating=seed,
             )
             session.add(row)
             by_opendota_id[team.opendota_team_id] = row

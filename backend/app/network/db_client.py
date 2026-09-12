@@ -15,22 +15,11 @@ class DbServiceClient:
     def _client(self) -> httpx.AsyncClient:
         return httpx.AsyncClient(base_url=self._base_url, timeout=30.0)
 
-    async def upsert_team(
-        self,
-        opendota_team_id: int,
-        name: str,
-        tag: str | None = None,
-        seed_rating: float | None = None,
-    ) -> dict:
+    async def upsert_team(self, opendota_team_id: int, name: str, tag: str | None = None) -> dict:
         async with self._client() as c:
             r = await c.post(
                 "/teams",
-                json={
-                    "opendota_team_id": opendota_team_id,
-                    "name": name,
-                    "tag": tag,
-                    "seed_rating": seed_rating,
-                },
+                json={"opendota_team_id": opendota_team_id, "name": name, "tag": tag},
             )
             r.raise_for_status()
             return r.json()

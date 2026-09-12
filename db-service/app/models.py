@@ -17,8 +17,10 @@ class Team(Base):
     opendota_team_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)
     name: Mapped[str] = mapped_column(String(200))
     tag: Mapped[str | None] = mapped_column(String(50), nullable=True)
-    rating: Mapped[float] = mapped_column(Float, default=1500.0)
-    seed_rating: Mapped[float] = mapped_column(Float, default=1500.0)
+    # A team with no observed matches sits at the prediction engine's base
+    # rating for an unknown tier (see baseRatingByTier there): it must not
+    # default into the tier-1 band just because nothing is known about it.
+    rating: Mapped[float] = mapped_column(Float, default=250.0)
     recent_form: Mapped[float] = mapped_column(Float, default=0.5)
     # Best league tier this team has been observed playing in ("tier1".."tier3",
     # or "unknown" when it hasn't appeared in any ingested match). Teams are

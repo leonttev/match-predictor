@@ -72,12 +72,9 @@ export interface LoginResponse {
 }
 
 export interface PredictResponse {
-  team_a: { id: number; name: string; tier: string };
-  team_b: { id: number; name: string; tier: string };
+  team_a: { id: number; name: string };
+  team_b: { id: number; name: string };
   team_a_win_prob: number;
-  elo_component: number;
-  form_component: number;
-  tier_adjustment: number;
   prediction_id: number;
 }
 

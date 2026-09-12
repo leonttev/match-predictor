@@ -1,17 +1,18 @@
 // Prediction engine: functional module (course requirement §2.6).
 //
 // Exposes an HTTP API (net/http, goroutine-per-request) that:
-//   - POST /ratings — replays match history sequentially to derive Elo ratings,
-//     and computes each team's recent-form win rate concurrently (worker pool
-//     of goroutines, one per CPU core).
-//   - POST /predict — combines the Elo rating gap and recent form into a match
-//     win probability via a logistic model.
+//   - POST /ratings — derives every team's rating and recent form from match
+//     history, fanned out across a worker pool of goroutines.
+//   - POST /predict — turns two teams' ratings into a win probability via a
+//     logistic model whose scale constant is calibrated on historical data
+//     (see scripts/calibrate.py).
 //
-// Elo update is inherently sequential per team (each match changes the rating
-// that the next match for that team depends on), so it runs as a single pass
-// over the time-ordered match list. Recent-form aggregation, in contrast, is
-// embarrassingly parallel across teams, so it is fanned out across goroutines
-// via a jobs/results channel pair.
+// Rating model: every team starts at baseRating and earns tier-weighted points
+// per result over a rolling window of its most recent ratingWindow matches.
+// A win at a tier-1 event is worth twice a tier-2 win and four times a tier-3
+// one, so the strength of the opposition pool is priced into the points
+// themselves rather than corrected for afterwards. Because the window sums
+// independent per-team results, teams are processed concurrently.
 package main
 
 import (
@@ -27,92 +28,191 @@ import (
 )
 
 const (
-	initialRating = 1500.0
-	// Kept deliberately low: the ingested match sample is small and often
-	// dominated by a single low-tier qualifier bracket running "right now",
-	// disconnected from the wider pro scene. A high K-factor lets a team
-	// snowball a large rating swing off just 3-4 wins inside that isolated
-	// bracket, which can push it above seeded elite teams that simply
-	// haven't played within the sampled window. A low K-factor keeps each
-	// team's seeded (OpenDota long-history) rating dominant and lets
-	// observed matches nudge it rather than override it.
-	kFactor    = 8.0
+	// Only a team's most recent matches count, so the rating tracks current
+	// strength instead of growing with career volume: a win is worth more
+	// than a loss costs, so without a window any team above a ~33% win rate
+	// would climb indefinitely just by playing often.
+	ratingWindow = 20
+
 	formWindow = 5
 )
 
+// Starting rating by the strongest tier a team has been observed in. Without
+// this, a team sweeping 20 tier-2 qualifier matches outranks a tier-1 team
+// that went 10-10 at a major, because lower-tier teams play far more matches
+// per window. The gap encodes "a team that belongs at tier 1 starts above a
+// team that belongs at tier 2", which the per-result points alone cannot.
+var baseRatingByTier = map[string]float64{
+	"tier1": 1000,
+	"tier2": 750,
+	"tier3": 500,
+}
+
+const unknownTierBaseRating = 250.0
+
+func baseRatingForTier(tier string) float64 {
+	if r, ok := baseRatingByTier[tier]; ok {
+		return r
+	}
+	return unknownTierBaseRating
+}
+
+// bestTier returns the strongest tier among a team's matches, which decides
+// both its starting rating and the tier reported to the rest of the system.
+func bestTier(games []teamGame) string {
+	best := UnknownTier
+	for _, g := range games {
+		if tierRank(g.tier) < tierRank(best) {
+			best = g.tier
+		}
+	}
+	return best
+}
+
+func tierRank(tier string) int {
+	switch tier {
+	case "tier1":
+		return 1
+	case "tier2":
+		return 2
+	case "tier3":
+		return 3
+	default:
+		return 4
+	}
+}
+
+// Points awarded per result, by the tier of the league the match was played
+// in. Each tier down halves the stake.
+type tierPoints struct {
+	win  float64
+	loss float64
+}
+
+var pointsByTier = map[string]tierPoints{
+	"tier1": {win: 50, loss: 25},
+	"tier2": {win: 25, loss: 13},
+	"tier3": {win: 13, loss: 7},
+}
+
+// Matches whose league tier could not be determined are scored on the same
+// halving pattern, one step below tier 3.
+var unknownTierPoints = tierPoints{win: 7, loss: 4}
+
+func pointsForTier(tier string) tierPoints {
+	return pointsForTierIn(pointsByTier, tier)
+}
+
+func pointsForTierIn(table map[string]tierPoints, tier string) tierPoints {
+	if p, ok := table[tier]; ok {
+		return p
+	}
+	if p, ok := table[UnknownTier]; ok {
+		return p
+	}
+	return unknownTierPoints
+}
+
+// UnknownTier is the key used for matches whose league tier could not be
+// determined, both in the points table and in incoming match data.
+const UnknownTier = "unknown"
+
 type MatchResult struct {
-	RadiantTeamID int64 `json:"radiant_team_id"`
-	DireTeamID    int64 `json:"dire_team_id"`
-	RadiantWin    bool  `json:"radiant_win"`
-	StartTime     int64 `json:"start_time"`
-}
-
-func expectedScore(ratingA, ratingB float64) float64 {
-	return 1.0 / (1.0 + math.Pow(10, (ratingB-ratingA)/400.0))
-}
-
-// computeElo runs a single sequential pass over time-ordered matches.
-// initialRatings seeds teams that have a known prior strength (e.g. from
-// OpenDota's own long-history rating) instead of starting everyone at a flat
-// initialRating — without this, a team that hasn't played within the ingested
-// match window stays parked at 1500 while a team that went on a short win
-// streak in a handful of low-tier qualifier matches can rank above it, which
-// inverts the real strength ordering.
-func computeElo(matches []MatchResult, initialRatings map[int64]float64) map[int64]float64 {
-	sorted := make([]MatchResult, len(matches))
-	copy(sorted, matches)
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i].StartTime < sorted[j].StartTime })
-
-	ratings := make(map[int64]float64)
-	getRating := func(id int64) float64 {
-		if r, ok := ratings[id]; ok {
-			return r
-		}
-		if r, ok := initialRatings[id]; ok {
-			return r
-		}
-		return initialRating
-	}
-
-	for _, m := range sorted {
-		ra := getRating(m.RadiantTeamID)
-		rb := getRating(m.DireTeamID)
-
-		expectedRadiant := expectedScore(ra, rb)
-		actualRadiant := 0.0
-		if m.RadiantWin {
-			actualRadiant = 1.0
-		}
-
-		ratings[m.RadiantTeamID] = ra + kFactor*(actualRadiant-expectedRadiant)
-		ratings[m.DireTeamID] = rb + kFactor*((1.0-actualRadiant)-(1.0-expectedRadiant))
-	}
-
-	return ratings
+	RadiantTeamID int64  `json:"radiant_team_id"`
+	DireTeamID    int64  `json:"dire_team_id"`
+	RadiantWin    bool   `json:"radiant_win"`
+	StartTime     int64  `json:"start_time"`
+	LeagueTier    string `json:"league_tier"`
 }
 
 type teamGame struct {
 	startTime int64
 	win       bool
+	tier      string
 }
 
-// computeForm derives each team's win rate over its last formWindow matches.
-// Teams are processed concurrently by a fixed pool of goroutines since one
-// team's history is independent of another's.
-func computeForm(matches []MatchResult) map[int64]float64 {
+type teamStats struct {
+	rating float64
+	form   float64
+	tier   string
+}
+
+func groupByTeam(matches []MatchResult) map[int64][]teamGame {
 	perTeam := make(map[int64][]teamGame)
 	for _, m := range matches {
-		perTeam[m.RadiantTeamID] = append(perTeam[m.RadiantTeamID], teamGame{m.StartTime, m.RadiantWin})
-		perTeam[m.DireTeamID] = append(perTeam[m.DireTeamID], teamGame{m.StartTime, !m.RadiantWin})
+		perTeam[m.RadiantTeamID] = append(
+			perTeam[m.RadiantTeamID], teamGame{m.StartTime, m.RadiantWin, m.LeagueTier},
+		)
+		perTeam[m.DireTeamID] = append(
+			perTeam[m.DireTeamID], teamGame{m.StartTime, !m.RadiantWin, m.LeagueTier},
+		)
 	}
+	return perTeam
+}
+
+// lastN returns the tail of a time-ordered slice.
+func lastN(games []teamGame, n int) []teamGame {
+	if len(games) <= n {
+		return games
+	}
+	return games[len(games)-n:]
+}
+
+// A nil table or a non-positive window mean "use the production defaults", so
+// the function is correct however it is called.
+func ratingFromGames(games []teamGame, table map[string]tierPoints, window int) float64 {
+	if table == nil {
+		table = pointsByTier
+	}
+	if window <= 0 {
+		window = ratingWindow
+	}
+
+	rating := baseRatingForTier(bestTier(games))
+	for _, g := range lastN(games, window) {
+		points := pointsForTierIn(table, g.tier)
+		if g.win {
+			rating += points.win
+		} else {
+			rating -= points.loss
+		}
+	}
+	return rating
+}
+
+func formFromGames(games []teamGame) float64 {
+	recent := lastN(games, formWindow)
+	if len(recent) == 0 {
+		return 0.5
+	}
+	wins := 0
+	for _, g := range recent {
+		if g.win {
+			wins++
+		}
+	}
+	return float64(wins) / float64(len(recent))
+}
+
+// computeTeamStats derives each team's rating and recent form. One team's
+// history is independent of every other's, so the work is fanned out across a
+// pool of goroutines sized to the available CPUs.
+//
+// The points table and window are parameters rather than fixed constants so
+// that scripts/calibrate.py can fit them on historical results; callers that
+// pass nothing get the production defaults.
+func computeTeamStats(
+	matches []MatchResult, table map[string]tierPoints, window int,
+) map[int64]teamStats {
+	perTeam := groupByTeam(matches)
 
 	type job struct {
 		teamID int64
 		games  []teamGame
 	}
 	type result struct {
-		teamID  int64
-		winRate float64
+		teamID int64
+		stats  teamStats
 	}
 
 	jobs := make(chan job, len(perTeam))
@@ -130,25 +230,14 @@ func computeForm(matches []MatchResult) map[int64]float64 {
 			defer wg.Done()
 			for j := range jobs {
 				games := j.games
-				sort.Slice(games, func(a, b int) bool { return games[a].startTime < games[b].startTime })
-
-				start := len(games) - formWindow
-				if start < 0 {
-					start = 0
-				}
-				recent := games[start:]
-
-				wins := 0
-				for _, g := range recent {
-					if g.win {
-						wins++
-					}
-				}
-				rate := 0.5
-				if len(recent) > 0 {
-					rate = float64(wins) / float64(len(recent))
-				}
-				results <- result{j.teamID, rate}
+				sort.Slice(games, func(a, b int) bool {
+					return games[a].startTime < games[b].startTime
+				})
+				results <- result{j.teamID, teamStats{
+					rating: ratingFromGames(games, table, window),
+					form:   formFromGames(games),
+					tier:   bestTier(games),
+				}}
 			}
 		}()
 	}
@@ -163,11 +252,11 @@ func computeForm(matches []MatchResult) map[int64]float64 {
 		close(results)
 	}()
 
-	form := make(map[int64]float64)
+	stats := make(map[int64]teamStats, len(perTeam))
 	for r := range results {
-		form[r.teamID] = r.winRate
+		stats[r.teamID] = r.stats
 	}
-	return form
+	return stats
 }
 
 func clamp(x, lo, hi float64) float64 {
@@ -182,18 +271,25 @@ func clamp(x, lo, hi float64) float64 {
 
 type ratingsRequest struct {
 	Matches []MatchResult `json:"matches"`
-	// InitialRatings seeds specific teams (keyed by team id as a string,
-	// since JSON object keys are always strings) with a known prior rating
-	// instead of the flat default. Teams not present here still start at
-	// initialRating.
-	InitialRatings map[string]float64 `json:"initial_ratings"`
+	// Optional overrides used by the calibration script; empty means the
+	// production defaults.
+	PointsByTier map[string]tierPointsPayload `json:"points_by_tier"`
+	RatingWindow int                          `json:"rating_window"`
+}
+
+type tierPointsPayload struct {
+	Win  float64 `json:"win"`
+	Loss float64 `json:"loss"`
 }
 
 type ratingsResponse struct {
-	Ratings          map[string]float64 `json:"ratings"`
-	Form             map[string]float64 `json:"form"`
-	TeamsCount       int                `json:"teams_count"`
-	MatchesProcessed int                `json:"matches_processed"`
+	Ratings map[string]float64 `json:"ratings"`
+	Form    map[string]float64 `json:"form"`
+	// Tiers is derived here rather than by the caller so that the tier a team
+	// is shown with is always the one its starting rating was based on.
+	Tiers            map[string]string `json:"tiers"`
+	TeamsCount       int               `json:"teams_count"`
+	MatchesProcessed int               `json:"matches_processed"`
 }
 
 func ratingsHandler(w http.ResponseWriter, r *http.Request) {
@@ -207,87 +303,59 @@ func ratingsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	matchesProcessed := len(req.Matches)
-	form := computeForm(req.Matches)
-
-	initialRatings := make(map[int64]float64, len(req.InitialRatings))
-	for idStr, rating := range req.InitialRatings {
-		id, err := strconv.ParseInt(idStr, 10, 64)
-		if err != nil {
-			continue
+	var table map[string]tierPoints
+	if len(req.PointsByTier) > 0 {
+		table = make(map[string]tierPoints, len(req.PointsByTier))
+		for tier, p := range req.PointsByTier {
+			table[tier] = tierPoints{win: p.Win, loss: p.Loss}
 		}
-		initialRatings[id] = rating
 	}
-	ratings := computeElo(req.Matches, initialRatings)
+
+	stats := computeTeamStats(req.Matches, table, req.RatingWindow)
 
 	resp := ratingsResponse{
-		Ratings:          make(map[string]float64, len(ratings)),
-		Form:             make(map[string]float64, len(form)),
-		TeamsCount:       len(ratings),
-		MatchesProcessed: matchesProcessed,
+		Ratings:          make(map[string]float64, len(stats)),
+		Form:             make(map[string]float64, len(stats)),
+		Tiers:            make(map[string]string, len(stats)),
+		TeamsCount:       len(stats),
+		MatchesProcessed: len(req.Matches),
 	}
-	for id, v := range ratings {
-		resp.Ratings[strconv.FormatInt(id, 10)] = v
-	}
-	for id, v := range form {
-		resp.Form[strconv.FormatInt(id, 10)] = v
+	for id, s := range stats {
+		key := strconv.FormatInt(id, 10)
+		resp.Ratings[key] = s.rating
+		resp.Form[key] = s.form
+		resp.Tiers[key] = s.tier
 	}
 
 	writeJSON(w, resp)
 }
 
+// ratingScale converts a rating gap into odds: a gap of ratingScale points
+// means 10:1. Unlike chess Elo's 400, this figure is not inherent to the
+// scoring system — the points above are assigned by hand — so it is fitted on
+// historical results by scripts/calibrate.py (which also reports the log loss
+// this value achieves). Re-run that script after changing the points table.
+const ratingScale = 1000.0
+
+// formWeight is how much of the final probability comes from recent form
+// rather than the rating gap; also fitted by scripts/calibrate.py.
+const formWeight = 0.1
+
+func logistic(ratingGap, scale float64) float64 {
+	return 1.0 / (1.0 + math.Pow(10, -ratingGap/scale))
+}
+
 type predictRequest struct {
 	TeamARating float64 `json:"team_a_rating"`
 	TeamAForm   float64 `json:"team_a_form"`
-	TeamATier   string  `json:"team_a_tier"`
 	TeamBRating float64 `json:"team_b_rating"`
 	TeamBForm   float64 `json:"team_b_form"`
-	TeamBTier   string  `json:"team_b_tier"`
 }
 
 type predictResponse struct {
-	TeamAWinProb   float64 `json:"team_a_win_prob"`
-	EloComponent   float64 `json:"elo_component"`
-	FormComponent  float64 `json:"form_component"`
-	TierAdjustment float64 `json:"tier_adjustment"`
-}
-
-// Elo points earned inside a tier-2 bracket are not worth the same as points
-// earned at a tier-1 event: the two pools barely play each other, so their
-// ratings drift apart independently (the classic disconnected-rating-pool
-// problem). Each tier step therefore shifts a team's effective rating before
-// the logistic is applied. Without this, a tier-1 team on a bad run at a major
-// is predicted to lose to a tier-2 team that went undefeated in a qualifier.
-const tierOffsetStep = 150.0
-
-func tierRank(tier string) int {
-	switch tier {
-	case "tier1":
-		return 1
-	case "tier2":
-		return 2
-	case "tier3":
-		return 3
-	default: // "unknown" — no observed tier-level play
-		return 4
-	}
-}
-
-func tierOffset(tier string) float64 {
-	return float64(4-tierRank(tier)) * tierOffsetStep
-}
-
-// Recent form is only directly comparable within a tier: going 5-0 in a
-// tier-2 qualifier is not the same achievement as going 5-0 at a tier-1
-// major, and a tier-1 team's 0-5 run came against tier-1 opposition. The
-// further apart the two tiers are, the less the form gap between them is
-// allowed to move the prediction.
-func formShrink(tierA, tierB string) float64 {
-	distance := tierRank(tierA) - tierRank(tierB)
-	if distance < 0 {
-		distance = -distance
-	}
-	return 1.0 / (1.0 + float64(distance))
+	TeamAWinProb    float64 `json:"team_a_win_prob"`
+	RatingComponent float64 `json:"rating_component"`
+	FormComponent   float64 `json:"form_component"`
 }
 
 func predictHandler(w http.ResponseWriter, r *http.Request) {
@@ -301,19 +369,16 @@ func predictHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tierAdjustment := tierOffset(req.TeamATier) - tierOffset(req.TeamBTier)
-	eloComponent := expectedScore(req.TeamARating+tierAdjustment, req.TeamBRating)
-
-	shrink := formShrink(req.TeamATier, req.TeamBTier)
-	formComponent := clamp(0.5+(req.TeamAForm-req.TeamBForm)*0.5*shrink, 0, 1)
-	// Weighted blend: Elo (long-run strength) dominates, recent form nudges it.
-	combined := clamp(0.7*eloComponent+0.3*formComponent, 0.01, 0.99)
+	ratingComponent := logistic(req.TeamARating-req.TeamBRating, ratingScale)
+	formComponent := clamp(0.5+(req.TeamAForm-req.TeamBForm)*0.5, 0, 1)
+	combined := clamp(
+		(1-formWeight)*ratingComponent+formWeight*formComponent, 0.01, 0.99,
+	)
 
 	writeJSON(w, predictResponse{
-		TeamAWinProb:   combined,
-		EloComponent:   eloComponent,
-		FormComponent:  formComponent,
-		TierAdjustment: tierAdjustment,
+		TeamAWinProb:    combined,
+		RatingComponent: ratingComponent,
+		FormComponent:   formComponent,
 	})
 }
 

@@ -24,8 +24,9 @@ TOP_TEAMS_LIMIT = 120
 # One page of /proMatches covers only the ~100 most recent pro matches, which
 # at any given moment is dominated by whatever low-tier qualifier is running.
 # Paging back further is what makes tier-1 events (e.g. The International)
-# actually appear in the data at all.
-PRO_MATCHES_PAGES = 6
+# actually appear in the data at all, and gives the calibration in
+# scripts/calibrate.py a held-out set big enough to measure against.
+PRO_MATCHES_PAGES = 20
 
 # OpenDota's league tiers mapped onto the tier labels the UI ranks by.
 # "excluded" leagues (the bulk of OpenDota's league table) and leagues with no
@@ -37,7 +38,6 @@ TIER_BY_OPENDOTA_TIER = {
     "amateur": "tier3",
 }
 UNKNOWN_TIER = "unknown"
-TIER_RANK = {"tier1": 1, "tier2": 2, "tier3": 3, UNKNOWN_TIER: 4}
 
 
 async def _fetch_top_teams(client: httpx.AsyncClient) -> list[dict]:
@@ -87,9 +87,11 @@ async def run_ingestion() -> dict:
         if m.get("radiant_team_id") and m.get("dire_team_id") and m.get("radiant_win") is not None
     ]
 
-    # Seed the known top teams with OpenDota's own long-history rating (see
-    # recompute_ratings for why), then add every other team that shows up in
-    # the ingested matches so the prediction pool isn't limited to the top.
+    # Pull in the known top teams by name, then add every other team that
+    # shows up in the ingested matches so the prediction pool isn't limited
+    # to the top. OpenDota's own team rating is deliberately not imported:
+    # every team starts from the same base and earns its rating from the
+    # tier-weighted results we observe.
     team_payloads: dict[int, dict] = {}
     for t in top_teams:
         if t.get("team_id") is None:
@@ -98,7 +100,6 @@ async def run_ingestion() -> dict:
             "opendota_team_id": t["team_id"],
             "name": t.get("name") or f"Team {t['team_id']}",
             "tag": t.get("tag"),
-            "seed_rating": t.get("rating"),
         }
 
     for m in usable_matches:
@@ -111,7 +112,6 @@ async def run_ingestion() -> dict:
                     "opendota_team_id": opendota_id,
                     "name": m.get(name_field) or f"Team {opendota_id}",
                     "tag": None,
-                    "seed_rating": None,
                 }
 
     stored_teams = await db_client.upsert_teams_bulk(list(team_payloads.values()))
@@ -145,21 +145,8 @@ async def run_ingestion() -> dict:
     }
 
 
-def _best_tier_by_team(stored_matches: list[dict]) -> dict[int, str]:
-    """A team's tier is the strongest league tier it has been observed playing
-    in. Teams with no observed matches keep the default unknown tier."""
-    best: dict[int, str] = {}
-    for m in stored_matches:
-        tier = m.get("league_tier") or UNKNOWN_TIER
-        for team_id in (m["radiant_team_id"], m["dire_team_id"]):
-            current = best.get(team_id)
-            if current is None or TIER_RANK[tier] < TIER_RANK[current]:
-                best[team_id] = tier
-    return best
-
-
 async def recompute_ratings() -> dict:
-    """Re-derives Elo ratings, recent form and tier from the full stored match
+    """Re-derives ratings, recent form and tier from the full stored match
     history and persists them onto each team row via the DB module."""
     stored_matches = await db_client.list_matches(limit=10_000)
     engine_matches = [
@@ -168,6 +155,7 @@ async def recompute_ratings() -> dict:
             "dire_team_id": m["dire_team_id"],
             "radiant_win": m["radiant_win"],
             "start_time": m["start_time"],
+            "league_tier": m.get("league_tier") or UNKNOWN_TIER,
         }
         for m in stored_matches
     ]
@@ -175,18 +163,17 @@ async def recompute_ratings() -> dict:
     if not engine_matches:
         return {"teams_count": 0}
 
-    all_teams = await db_client.list_teams()
-    initial_ratings = {str(t["id"]): t["seed_rating"] for t in all_teams}
+    result = await prediction_client.compute_ratings(engine_matches)
 
-    result = await prediction_client.compute_ratings(engine_matches, initial_ratings)
-    tier_by_team = _best_tier_by_team(stored_matches)
-
+    # The engine reports each team's tier alongside its rating, since the tier
+    # is what its starting rating was based on — deriving it again here would
+    # risk showing a tier the rating wasn't actually built from.
     updates = [
         {
             "team_id": int(team_id),
             "rating": rating,
             "recent_form": result["form"].get(team_id, 0.5),
-            "tier": tier_by_team.get(int(team_id), UNKNOWN_TIER),
+            "tier": result["tiers"].get(team_id, UNKNOWN_TIER),
         }
         for team_id, rating in result["ratings"].items()
     ]
