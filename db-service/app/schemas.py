@@ -48,6 +48,7 @@ class MatchOut(MatchIn):
 
 
 class PredictionIn(BaseModel):
+    user_id: int
     team_a_id: int
     team_b_id: int
     team_a_win_prob: float

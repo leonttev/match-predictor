@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { tierLabel, type Team } from "../api/client";
+import type { Team } from "../api/client";
 
 interface Props {
   teams: Team[];
@@ -53,8 +53,7 @@ export default function TeamAutocomplete({ teams, placeholder, value, onChange }
         <ul className="autocomplete-list">
           {suggestions.map((t) => (
             <li key={t.id} onMouseDown={() => selectTeam(t)}>
-              <span>{t.name}</span>
-              <span className={`tier-badge ${t.tier}`}>{tierLabel(t.tier)}</span>
+              {t.name}
             </li>
           ))}
         </ul>

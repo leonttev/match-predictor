@@ -1,9 +1,8 @@
 import { useEffect, useState } from "react";
 import {
   api,
-  tierLabel,
   tierRank,
-  type Match,
+  type PredictionHistoryItem,
   type PredictResponse,
   type Roster,
   type Team,
@@ -19,7 +18,7 @@ interface Props {
 
 export default function Dashboard({ token, twoFactorEnabled, onLogout, onSetup2fa }: Props) {
   const [teams, setTeams] = useState<Team[]>([]);
-  const [matches, setMatches] = useState<Match[]>([]);
+  const [history, setHistory] = useState<PredictionHistoryItem[]>([]);
   const [teamAQuery, setTeamAQuery] = useState("");
   const [teamBQuery, setTeamBQuery] = useState("");
   const [teamAId, setTeamAId] = useState<number | "">("");
@@ -36,16 +35,14 @@ export default function Dashboard({ token, twoFactorEnabled, onLogout, onSetup2f
 
   async function loadData() {
     try {
-      const [t, m] = await Promise.all([
+      const [t, h] = await Promise.all([
         api.listTeams(token),
-        // Only tier-1 (premium) events — lower-tier qualifiers dominate the
-        // raw feed by volume and drown out the matches that matter.
-        api.listMatches(token, 30, "tier1"),
+        api.predictionHistory(token),
       ]);
       // Tier first, rating second: a tier2 team never outranks a tier1 one.
       t.sort((a, b) => tierRank(a.tier) - tierRank(b.tier) || b.rating - a.rating);
       setTeams(t);
-      setMatches(m);
+      setHistory(h);
       setLoadError(null);
     } catch {
       setLoadError("Не удалось загрузить данные с бэкенда");
@@ -91,6 +88,7 @@ export default function Dashboard({ token, twoFactorEnabled, onLogout, onSetup2f
     try {
       const res = await api.predict(token, Number(teamAId), Number(teamBId));
       setPrediction(res);
+      setHistory(await api.predictionHistory(token));
     } catch {
       setLoadError("Не удалось построить прогноз");
     } finally {
@@ -164,22 +162,9 @@ export default function Dashboard({ token, twoFactorEnabled, onLogout, onSetup2f
               />
             </div>
             <p>
-              <strong>{prediction.team_a.name}</strong>{" "}
-              <span className={`tier-badge ${prediction.team_a.tier}`}>
-                {tierLabel(prediction.team_a.tier)}
-              </span>{" "}
-              победит с вероятностью{" "}
+              <strong>{prediction.team_a.name}</strong> победит с вероятностью{" "}
               <strong>{(prediction.team_a_win_prob * 100).toFixed(1)}%</strong> против{" "}
-              <strong>{prediction.team_b.name}</strong>{" "}
-              <span className={`tier-badge ${prediction.team_b.tier}`}>
-                {tierLabel(prediction.team_b.tier)}
-              </span>
-            </p>
-            <p className="hint">
-              Elo-компонента: {(prediction.elo_component * 100).toFixed(1)}% · форма:{" "}
-              {(prediction.form_component * 100).toFixed(1)}% · поправка на тир:{" "}
-              {prediction.tier_adjustment > 0 ? "+" : ""}
-              {prediction.tier_adjustment.toFixed(0)} Elo
+              <strong>{prediction.team_b.name}</strong>
             </p>
           </div>
         )}
@@ -198,7 +183,6 @@ export default function Dashboard({ token, twoFactorEnabled, onLogout, onSetup2f
               >
                 <span className="rank">{i + 1}</span>
                 <span className="team-name">{t.name}</span>
-                <span className={`tier-badge ${t.tier}`}>{tierLabel(t.tier)}</span>
               </li>
             ))}
           </ul>
@@ -218,17 +202,13 @@ export default function Dashboard({ token, twoFactorEnabled, onLogout, onSetup2f
                 return (
                   <>
                     <h3>{teamName}</h3>
-                    {entry.players.length === 0 ? (
-                      <p className="hint">Действующий состав не найден в OpenDota.</p>
-                    ) : (
-                      <ul className="roster-players">
-                        {entry.players.map((p) => (
-                          <li key={p.name}>
-                            {p.name} <span className="hint">{p.games_played} игр</span>
-                          </li>
-                        ))}
-                      </ul>
-                    )}
+                    <ul className="roster-players">
+                      {entry.players.map((p) => (
+                        <li key={p.name}>
+                          {p.name} <span className="hint">{p.games_played} игр</span>
+                        </li>
+                      ))}
+                    </ul>
                   </>
                 );
               })()
@@ -238,29 +218,35 @@ export default function Dashboard({ token, twoFactorEnabled, onLogout, onSetup2f
       </section>
 
       <section className="panel">
-        <h2>Последние матчи (Tier 1)</h2>
-        <div className="table-scroll">
-          <table>
-            <thead>
-              <tr>
-                <th>Radiant</th>
-                <th>Dire</th>
-                <th>Результат</th>
-                <th>Лига</th>
-              </tr>
-            </thead>
-            <tbody>
-              {matches.map((m) => (
-                <tr key={m.id}>
-                  <td>{m.radiant_team_name}</td>
-                  <td>{m.dire_team_name}</td>
-                  <td>{m.radiant_win ? "Radiant win" : "Dire win"}</td>
-                  <td>{m.league_name ?? "—"}</td>
+        <h2>История моих прогнозов</h2>
+        {history.length === 0 ? (
+          <p className="hint">Вы пока не построили ни одного прогноза.</p>
+        ) : (
+          <div className="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Матч</th>
+                  <th>Прогноз</th>
+                  <th>Дата</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {history.map((p) => (
+                  <tr key={p.id}>
+                    <td>
+                      {p.team_a_name} — {p.team_b_name}
+                    </td>
+                    <td>
+                      {(p.team_a_win_prob * 100).toFixed(1)}% за {p.team_a_name}
+                    </td>
+                    <td>{new Date(p.created_at).toLocaleString("ru-RU")}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </section>
     </div>
   );

@@ -278,25 +278,6 @@ button.secondary {
   font-size: 14px;
 }
 
-.tier-badge {
-  font-size: 11px;
-  padding: 2px 7px;
-  border-radius: 999px;
-  border: 1px solid var(--border);
-  color: var(--muted);
-  white-space: nowrap;
-}
-
-.tier-badge.tier1 {
-  border-color: rgba(47, 216, 151, 0.5);
-  color: var(--accent-2);
-}
-
-.tier-badge.tier2 {
-  border-color: rgba(91, 141, 239, 0.5);
-  color: var(--accent);
-}
-
 .badge-ok {
   font-size: 12px;
   padding: 4px 10px;

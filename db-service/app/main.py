@@ -249,9 +249,14 @@ def create_prediction(prediction: schemas.PredictionIn, session: Session = Depen
 
 
 @app.get("/predictions", response_model=list[schemas.PredictionOut])
-def list_predictions(limit: int = 50, session: Session = Depends(get_session)):
+def list_predictions(
+    limit: int = 50, user_id: int | None = None, session: Session = Depends(get_session)
+):
+    query = select(models.Prediction)
+    if user_id is not None:
+        query = query.where(models.Prediction.user_id == user_id)
     result = session.scalars(
-        select(models.Prediction).order_by(models.Prediction.created_at.desc()).limit(limit)
+        query.order_by(models.Prediction.created_at.desc()).limit(limit)
     )
     return list(result.all())
 

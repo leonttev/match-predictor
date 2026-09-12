@@ -44,6 +44,7 @@ class Prediction(Base):
     __tablename__ = "predictions"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
     team_a_id: Mapped[int] = mapped_column(ForeignKey("teams.id"))
     team_b_id: Mapped[int] = mapped_column(ForeignKey("teams.id"))
     team_a_win_prob: Mapped[float] = mapped_column(Float)

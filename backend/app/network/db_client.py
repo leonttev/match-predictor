@@ -94,9 +94,12 @@ class DbServiceClient:
             r.raise_for_status()
             return r.json()
 
-    async def list_predictions(self, limit: int = 50) -> list[dict]:
+    async def list_predictions(self, limit: int = 50, user_id: int | None = None) -> list[dict]:
+        params: dict = {"limit": limit}
+        if user_id is not None:
+            params["user_id"] = user_id
         async with self._client() as c:
-            r = await c.get("/predictions", params={"limit": limit})
+            r = await c.get("/predictions", params=params)
             r.raise_for_status()
             return r.json()
 

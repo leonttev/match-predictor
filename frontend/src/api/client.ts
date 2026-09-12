@@ -39,19 +39,8 @@ export const TIER_RANK: Record<Tier, number> = {
   unknown: 4,
 };
 
-export const TIER_LABEL: Record<Tier, string> = {
-  tier1: "Tier 1",
-  tier2: "Tier 2",
-  tier3: "Tier 3",
-  unknown: "—",
-};
-
 export function tierRank(tier: string): number {
   return TIER_RANK[tier as Tier] ?? 4;
-}
-
-export function tierLabel(tier: string): string {
-  return TIER_LABEL[tier as Tier] ?? "—";
 }
 
 export interface Team {
@@ -95,6 +84,14 @@ export interface PredictResponse {
 export interface RosterPlayer {
   name: string;
   games_played: number;
+}
+
+export interface PredictionHistoryItem {
+  id: number;
+  team_a_name: string;
+  team_b_name: string;
+  team_a_win_prob: number;
+  created_at: string;
 }
 
 export interface Roster {
@@ -145,6 +142,9 @@ export const api = {
       token,
       body: { team_a_id: teamAId, team_b_id: teamBId },
     }),
+
+  predictionHistory: (token: string, limit = 50) =>
+    request<PredictionHistoryItem[]>(`/predict/history?limit=${limit}`, { token }),
 
   runIngestion: (token: string) =>
     request<{
