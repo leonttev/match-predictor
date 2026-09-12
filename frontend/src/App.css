@@ -168,9 +168,110 @@ button.secondary {
   flex-wrap: wrap;
 }
 
-.predict-form select {
+.predict-form .autocomplete {
+  position: relative;
   flex: 1;
   min-width: 200px;
+}
+
+.predict-form .predict-input {
+  width: 100%;
+}
+
+.autocomplete-list {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 10;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  max-height: 240px;
+  overflow-y: auto;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.autocomplete-list li {
+  padding: 8px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.autocomplete-list li:hover {
+  background: rgba(91, 141, 239, 0.18);
+}
+
+.top-teams-layout {
+  display: flex;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+
+.top-teams-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  flex: 1;
+  min-width: 220px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.top-teams-list li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  cursor: pointer;
+}
+
+.top-teams-list li:hover,
+.top-teams-list li.active {
+  border-color: var(--accent);
+  background: rgba(91, 141, 239, 0.1);
+}
+
+.top-teams-list .rank {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  width: 16px;
+}
+
+.top-teams-list .team-name {
+  flex: 1;
+  font-weight: 500;
+}
+
+.roster-panel {
+  flex: 1;
+  min-width: 220px;
+  background: #0d1220;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.roster-panel h3 {
+  margin: 0 0 10px;
+  font-size: 15px;
+}
+
+.roster-players {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 14px;
 }
 
 .prediction-result {

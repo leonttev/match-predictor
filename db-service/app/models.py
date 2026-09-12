@@ -18,6 +18,7 @@ class Team(Base):
     name: Mapped[str] = mapped_column(String(200))
     tag: Mapped[str | None] = mapped_column(String(50), nullable=True)
     rating: Mapped[float] = mapped_column(Float, default=1500.0)
+    seed_rating: Mapped[float] = mapped_column(Float, default=1500.0)
     recent_form: Mapped[float] = mapped_column(Float, default=0.5)
 
 

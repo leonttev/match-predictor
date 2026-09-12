@@ -64,6 +64,17 @@ export interface PredictResponse {
   prediction_id: number;
 }
 
+export interface RosterPlayer {
+  name: string;
+  games_played: number;
+}
+
+export interface Roster {
+  team_id: number;
+  team_name: string;
+  players: RosterPlayer[];
+}
+
 export const api = {
   register: (username: string, email: string, password: string) =>
     request<{ id: number; username: string }>("/auth/register", {
@@ -90,6 +101,9 @@ export const api = {
     request<{ status: string }>("/auth/2fa/enable", { method: "POST", token, body: { code } }),
 
   listTeams: (token: string) => request<Team[]>("/teams", { token }),
+
+  getRoster: (token: string, teamId: number) =>
+    request<Roster>(`/teams/${teamId}/roster`, { token }),
 
   listMatches: (token: string, limit = 30) =>
     request<Match[]>(`/matches?limit=${limit}`, { token }),

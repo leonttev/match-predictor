@@ -62,7 +62,7 @@ export default function TwoFactorSetup({ token, onEnabled, onSkip }: Props) {
         </button>
       </form>
       <p className="switch-link">
-        <a onClick={onSkip}>Пропустить пока</a>
+        <a onClick={onSkip}>Пропустить</a>
       </p>
     </div>
   );

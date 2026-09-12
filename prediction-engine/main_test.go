@@ -9,12 +9,23 @@ func TestEloFavorsWinner(t *testing.T) {
 	matches := []MatchResult{
 		{RadiantTeamID: 1, DireTeamID: 2, RadiantWin: true, StartTime: 100},
 	}
-	ratings := computeElo(matches)
+	ratings := computeElo(matches, nil)
 	if ratings[1] <= initialRating {
 		t.Errorf("expected winner rating > %v, got %v", initialRating, ratings[1])
 	}
 	if ratings[2] >= initialRating {
 		t.Errorf("expected loser rating < %v, got %v", initialRating, ratings[2])
+	}
+}
+
+func TestEloUsesInitialRatingSeed(t *testing.T) {
+	matches := []MatchResult{
+		{RadiantTeamID: 1, DireTeamID: 2, RadiantWin: true, StartTime: 100},
+	}
+	seeded := computeElo(matches, map[int64]float64{1: 1800, 2: 1800})
+	unseeded := computeElo(matches, nil)
+	if seeded[1] <= unseeded[1] {
+		t.Errorf("expected a higher seed to carry through to the post-match rating: seeded=%v unseeded=%v", seeded[1], unseeded[1])
 	}
 }
 

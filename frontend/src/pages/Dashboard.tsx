@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { api, type Match, type PredictResponse, type Team } from "../api/client";
+import { api, type Match, type PredictResponse, type Roster, type Team } from "../api/client";
+import TeamAutocomplete from "../components/TeamAutocomplete";
 
 interface Props {
   token: string;
@@ -10,6 +11,8 @@ interface Props {
 export default function Dashboard({ token, onLogout, onSetup2fa }: Props) {
   const [teams, setTeams] = useState<Team[]>([]);
   const [matches, setMatches] = useState<Match[]>([]);
+  const [teamAQuery, setTeamAQuery] = useState("");
+  const [teamBQuery, setTeamBQuery] = useState("");
   const [teamAId, setTeamAId] = useState<number | "">("");
   const [teamBId, setTeamBId] = useState<number | "">("");
   const [prediction, setPrediction] = useState<PredictResponse | null>(null);
@@ -17,6 +20,10 @@ export default function Dashboard({ token, onLogout, onSetup2fa }: Props) {
   const [ingesting, setIngesting] = useState(false);
   const [predicting, setPredicting] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [rosterTeamId, setRosterTeamId] = useState<number | null>(null);
+  const [rosterCache, setRosterCache] = useState<Record<number, Roster | "loading" | "error">>(
+    {},
+  );
 
   async function loadData() {
     try {
@@ -49,6 +56,16 @@ export default function Dashboard({ token, onLogout, onSetup2fa }: Props) {
     } finally {
       setIngesting(false);
     }
+  }
+
+  function showRoster(teamId: number) {
+    setRosterTeamId(teamId);
+    if (rosterCache[teamId]) return;
+    setRosterCache((prev) => ({ ...prev, [teamId]: "loading" }));
+    api
+      .getRoster(token, teamId)
+      .then((roster) => setRosterCache((prev) => ({ ...prev, [teamId]: roster })))
+      .catch(() => setRosterCache((prev) => ({ ...prev, [teamId]: "error" })));
   }
 
   async function handlePredict(e: React.FormEvent) {
@@ -95,23 +112,25 @@ export default function Dashboard({ token, onLogout, onSetup2fa }: Props) {
       <section className="panel">
         <h2>Прогноз матча</h2>
         <form className="predict-form" onSubmit={handlePredict}>
-          <select value={teamAId} onChange={(e) => setTeamAId(Number(e.target.value) || "")}>
-            <option value="">Команда A</option>
-            {teams.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.name} ({Math.round(t.rating)})
-              </option>
-            ))}
-          </select>
+          <TeamAutocomplete
+            teams={teams}
+            placeholder="Команда A"
+            value={teamAQuery}
+            onChange={(q, id) => {
+              setTeamAQuery(q);
+              setTeamAId(id);
+            }}
+          />
           <span>vs</span>
-          <select value={teamBId} onChange={(e) => setTeamBId(Number(e.target.value) || "")}>
-            <option value="">Команда B</option>
-            {teams.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.name} ({Math.round(t.rating)})
-              </option>
-            ))}
-          </select>
+          <TeamAutocomplete
+            teams={teams}
+            placeholder="Команда B"
+            value={teamBQuery}
+            onChange={(q, id) => {
+              setTeamBQuery(q);
+              setTeamBId(id);
+            }}
+          />
           <button type="submit" disabled={predicting || teamAId === "" || teamBId === ""}>
             {predicting ? "..." : "Спрогнозировать"}
           </button>
@@ -139,26 +158,54 @@ export default function Dashboard({ token, onLogout, onSetup2fa }: Props) {
       </section>
 
       <section className="panel">
-        <h2>Команды по рейтингу ({teams.length})</h2>
-        <div className="table-scroll">
-          <table>
-            <thead>
-              <tr>
-                <th>Команда</th>
-                <th>Рейтинг (Elo)</th>
-                <th>Форма</th>
-              </tr>
-            </thead>
-            <tbody>
-              {teams.slice(0, 20).map((t) => (
-                <tr key={t.id}>
-                  <td>{t.name}</td>
-                  <td>{Math.round(t.rating)}</td>
-                  <td>{Math.round(t.recent_form * 100)}%</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <h2>Топ-5 команд</h2>
+        <div className="top-teams-layout">
+          <ul className="top-teams-list">
+            {teams.slice(0, 5).map((t, i) => (
+              <li
+                key={t.id}
+                className={rosterTeamId === t.id ? "active" : ""}
+                onMouseEnter={() => showRoster(t.id)}
+                onClick={() => showRoster(t.id)}
+              >
+                <span className="rank">{i + 1}</span>
+                <span className="team-name">{t.name}</span>
+                <span className="hint">форма {Math.round(t.recent_form * 100)}%</span>
+              </li>
+            ))}
+          </ul>
+          <div className="roster-panel">
+            {rosterTeamId === null ? (
+              <p className="hint">Наведите на команду слева, чтобы увидеть состав.</p>
+            ) : (
+              (() => {
+                const entry = rosterCache[rosterTeamId];
+                const teamName = teams.find((t) => t.id === rosterTeamId)?.name ?? "";
+                if (entry === "loading" || entry === undefined) {
+                  return <p className="hint">Загрузка состава...</p>;
+                }
+                if (entry === "error") {
+                  return <p className="error">Не удалось загрузить состав</p>;
+                }
+                return (
+                  <>
+                    <h3>{teamName}</h3>
+                    {entry.players.length === 0 ? (
+                      <p className="hint">Действующий состав не найден в OpenDota.</p>
+                    ) : (
+                      <ul className="roster-players">
+                        {entry.players.map((p) => (
+                          <li key={p.name}>
+                            {p.name} <span className="hint">{p.games_played} игр</span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </>
+                );
+              })()
+            )}
+          </div>
         </div>
       </section>
 

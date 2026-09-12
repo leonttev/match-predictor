@@ -28,8 +28,16 @@ import (
 
 const (
 	initialRating = 1500.0
-	kFactor       = 32.0
-	formWindow    = 5
+	// Kept deliberately low: the ingested match sample is small and often
+	// dominated by a single low-tier qualifier bracket running "right now",
+	// disconnected from the wider pro scene. A high K-factor lets a team
+	// snowball a large rating swing off just 3-4 wins inside that isolated
+	// bracket, which can push it above seeded elite teams that simply
+	// haven't played within the sampled window. A low K-factor keeps each
+	// team's seeded (OpenDota long-history) rating dominant and lets
+	// observed matches nudge it rather than override it.
+	kFactor    = 8.0
+	formWindow = 5
 )
 
 type MatchResult struct {
@@ -44,7 +52,13 @@ func expectedScore(ratingA, ratingB float64) float64 {
 }
 
 // computeElo runs a single sequential pass over time-ordered matches.
-func computeElo(matches []MatchResult) map[int64]float64 {
+// initialRatings seeds teams that have a known prior strength (e.g. from
+// OpenDota's own long-history rating) instead of starting everyone at a flat
+// initialRating — without this, a team that hasn't played within the ingested
+// match window stays parked at 1500 while a team that went on a short win
+// streak in a handful of low-tier qualifier matches can rank above it, which
+// inverts the real strength ordering.
+func computeElo(matches []MatchResult, initialRatings map[int64]float64) map[int64]float64 {
 	sorted := make([]MatchResult, len(matches))
 	copy(sorted, matches)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].StartTime < sorted[j].StartTime })
@@ -52,6 +66,9 @@ func computeElo(matches []MatchResult) map[int64]float64 {
 	ratings := make(map[int64]float64)
 	getRating := func(id int64) float64 {
 		if r, ok := ratings[id]; ok {
+			return r
+		}
+		if r, ok := initialRatings[id]; ok {
 			return r
 		}
 		return initialRating
@@ -165,6 +182,11 @@ func clamp(x, lo, hi float64) float64 {
 
 type ratingsRequest struct {
 	Matches []MatchResult `json:"matches"`
+	// InitialRatings seeds specific teams (keyed by team id as a string,
+	// since JSON object keys are always strings) with a known prior rating
+	// instead of the flat default. Teams not present here still start at
+	// initialRating.
+	InitialRatings map[string]float64 `json:"initial_ratings"`
 }
 
 type ratingsResponse struct {
@@ -187,7 +209,16 @@ func ratingsHandler(w http.ResponseWriter, r *http.Request) {
 
 	matchesProcessed := len(req.Matches)
 	form := computeForm(req.Matches)
-	ratings := computeElo(req.Matches)
+
+	initialRatings := make(map[int64]float64, len(req.InitialRatings))
+	for idStr, rating := range req.InitialRatings {
+		id, err := strconv.ParseInt(idStr, 10, 64)
+		if err != nil {
+			continue
+		}
+		initialRatings[id] = rating
+	}
+	ratings := computeElo(req.Matches, initialRatings)
 
 	resp := ratingsResponse{
 		Ratings:          make(map[string]float64, len(ratings)),

@@ -64,14 +64,23 @@ async def run_ingestion() -> dict:
     # Match rows reference teams by internal id, not by the upstream id.
     internal_id_by_opendota_id: dict[int, int] = {}
 
-    async def upsert_and_remember(opendota_id: int, name: str, tag: str | None = None) -> None:
-        team = await db_client.upsert_team(opendota_id, name, tag)
+    async def upsert_and_remember(
+        opendota_id: int, name: str, tag: str | None = None, seed_rating: float | None = None
+    ) -> None:
+        team = await db_client.upsert_team(opendota_id, name, tag, seed_rating)
         internal_id_by_opendota_id[opendota_id] = team["id"]
 
     # Upsert the top-rated teams first so the UI has a browsable team list
-    # even before any of them show up in recent pro matches.
+    # even before any of them show up in recent pro matches. Seed each one
+    # with OpenDota's own long-history rating (computed over that team's
+    # full match record) rather than a flat default — otherwise an elite
+    # team that hasn't played within our small ingested match window stays
+    # parked at 1500 and ranks below a minor team that won a short streak
+    # of low-tier qualifier matches.
     upsert_tasks = [
-        upsert_and_remember(t["team_id"], t.get("name") or f"Team {t['team_id']}", t.get("tag"))
+        upsert_and_remember(
+            t["team_id"], t.get("name") or f"Team {t['team_id']}", t.get("tag"), t.get("rating")
+        )
         for t in top_teams
         if t.get("team_id") is not None
     ]
@@ -142,7 +151,10 @@ async def recompute_ratings() -> dict:
     if not engine_matches:
         return {"teams_count": 0}
 
-    result = await prediction_client.compute_ratings(engine_matches)
+    all_teams = await db_client.list_teams()
+    initial_ratings = {str(t["id"]): t["seed_rating"] for t in all_teams}
+
+    result = await prediction_client.compute_ratings(engine_matches, initial_ratings)
 
     update_tasks = [
         db_client.update_team_rating(

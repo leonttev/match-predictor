@@ -7,6 +7,10 @@ class TeamIn(BaseModel):
     opendota_team_id: int
     name: str
     tag: str | None = None
+    # Prior strength from an external source (OpenDota's own long-history
+    # rating), used as the Elo starting point instead of a flat default —
+    # see db-service/app/main.py::upsert_team for how it's applied.
+    seed_rating: float | None = None
 
 
 class TeamOut(TeamIn):

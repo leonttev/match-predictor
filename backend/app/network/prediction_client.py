@@ -1,4 +1,4 @@
-"""Network module: async HTTP client to the Rust prediction-engine (functional
+"""Network module: async HTTP client to the Go prediction-engine (functional
 module, course requirement §2.6)."""
 
 import httpx
@@ -13,9 +13,14 @@ class PredictionEngineClient:
     def _client(self) -> httpx.AsyncClient:
         return httpx.AsyncClient(base_url=self._base_url, timeout=15.0)
 
-    async def compute_ratings(self, matches: list[dict]) -> dict:
+    async def compute_ratings(
+        self, matches: list[dict], initial_ratings: dict[str, float] | None = None
+    ) -> dict:
         async with self._client() as c:
-            r = await c.post("/ratings", json={"matches": matches})
+            r = await c.post(
+                "/ratings",
+                json={"matches": matches, "initial_ratings": initial_ratings or {}},
+            )
             r.raise_for_status()
             return r.json()
 
