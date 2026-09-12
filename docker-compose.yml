@@ -1,0 +1,55 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: matchpredictor
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  prediction-engine:
+    build: ./prediction-engine
+    ports:
+      - "8090:8090"
+
+  db-service:
+    build: ./db-service
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg2://postgres:postgres@postgres:5432/matchpredictor
+    ports:
+      - "8081:8081"
+
+  backend:
+    build: ./backend
+    depends_on:
+      - db-service
+      - prediction-engine
+    environment:
+      APP_DB_SERVICE_URL: http://db-service:8081
+      APP_PREDICTION_ENGINE_URL: http://prediction-engine:8090
+      APP_JWT_SECRET: change-me-in-production
+    ports:
+      - "8000:8000"
+
+  frontend:
+    build: ./frontend
+    depends_on:
+      - backend
+    ports:
+      - "5173:80"
+
+volumes:
+  pgdata:
