@@ -239,14 +239,55 @@ func ratingsHandler(w http.ResponseWriter, r *http.Request) {
 type predictRequest struct {
 	TeamARating float64 `json:"team_a_rating"`
 	TeamAForm   float64 `json:"team_a_form"`
+	TeamATier   string  `json:"team_a_tier"`
 	TeamBRating float64 `json:"team_b_rating"`
 	TeamBForm   float64 `json:"team_b_form"`
+	TeamBTier   string  `json:"team_b_tier"`
 }
 
 type predictResponse struct {
-	TeamAWinProb  float64 `json:"team_a_win_prob"`
-	EloComponent  float64 `json:"elo_component"`
-	FormComponent float64 `json:"form_component"`
+	TeamAWinProb   float64 `json:"team_a_win_prob"`
+	EloComponent   float64 `json:"elo_component"`
+	FormComponent  float64 `json:"form_component"`
+	TierAdjustment float64 `json:"tier_adjustment"`
+}
+
+// Elo points earned inside a tier-2 bracket are not worth the same as points
+// earned at a tier-1 event: the two pools barely play each other, so their
+// ratings drift apart independently (the classic disconnected-rating-pool
+// problem). Each tier step therefore shifts a team's effective rating before
+// the logistic is applied. Without this, a tier-1 team on a bad run at a major
+// is predicted to lose to a tier-2 team that went undefeated in a qualifier.
+const tierOffsetStep = 150.0
+
+func tierRank(tier string) int {
+	switch tier {
+	case "tier1":
+		return 1
+	case "tier2":
+		return 2
+	case "tier3":
+		return 3
+	default: // "unknown" — no observed tier-level play
+		return 4
+	}
+}
+
+func tierOffset(tier string) float64 {
+	return float64(4-tierRank(tier)) * tierOffsetStep
+}
+
+// Recent form is only directly comparable within a tier: going 5-0 in a
+// tier-2 qualifier is not the same achievement as going 5-0 at a tier-1
+// major, and a tier-1 team's 0-5 run came against tier-1 opposition. The
+// further apart the two tiers are, the less the form gap between them is
+// allowed to move the prediction.
+func formShrink(tierA, tierB string) float64 {
+	distance := tierRank(tierA) - tierRank(tierB)
+	if distance < 0 {
+		distance = -distance
+	}
+	return 1.0 / (1.0 + float64(distance))
 }
 
 func predictHandler(w http.ResponseWriter, r *http.Request) {
@@ -260,15 +301,19 @@ func predictHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	eloComponent := expectedScore(req.TeamARating, req.TeamBRating)
-	formComponent := clamp(0.5+(req.TeamAForm-req.TeamBForm)*0.5, 0, 1)
+	tierAdjustment := tierOffset(req.TeamATier) - tierOffset(req.TeamBTier)
+	eloComponent := expectedScore(req.TeamARating+tierAdjustment, req.TeamBRating)
+
+	shrink := formShrink(req.TeamATier, req.TeamBTier)
+	formComponent := clamp(0.5+(req.TeamAForm-req.TeamBForm)*0.5*shrink, 0, 1)
 	// Weighted blend: Elo (long-run strength) dominates, recent form nudges it.
 	combined := clamp(0.7*eloComponent+0.3*formComponent, 0.01, 0.99)
 
 	writeJSON(w, predictResponse{
-		TeamAWinProb:  combined,
-		EloComponent:  eloComponent,
-		FormComponent: formComponent,
+		TeamAWinProb:   combined,
+		EloComponent:   eloComponent,
+		FormComponent:  formComponent,
+		TierAdjustment: tierAdjustment,
 	})
 }
 

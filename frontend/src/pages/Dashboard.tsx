@@ -1,14 +1,23 @@
 import { useEffect, useState } from "react";
-import { api, type Match, type PredictResponse, type Roster, type Team } from "../api/client";
+import {
+  api,
+  tierLabel,
+  tierRank,
+  type Match,
+  type PredictResponse,
+  type Roster,
+  type Team,
+} from "../api/client";
 import TeamAutocomplete from "../components/TeamAutocomplete";
 
 interface Props {
   token: string;
+  twoFactorEnabled: boolean;
   onLogout: () => void;
   onSetup2fa: () => void;
 }
 
-export default function Dashboard({ token, onLogout, onSetup2fa }: Props) {
+export default function Dashboard({ token, twoFactorEnabled, onLogout, onSetup2fa }: Props) {
   const [teams, setTeams] = useState<Team[]>([]);
   const [matches, setMatches] = useState<Match[]>([]);
   const [teamAQuery, setTeamAQuery] = useState("");
@@ -27,8 +36,14 @@ export default function Dashboard({ token, onLogout, onSetup2fa }: Props) {
 
   async function loadData() {
     try {
-      const [t, m] = await Promise.all([api.listTeams(token), api.listMatches(token, 30)]);
-      t.sort((a, b) => b.rating - a.rating);
+      const [t, m] = await Promise.all([
+        api.listTeams(token),
+        // Only tier-1 (premium) events — lower-tier qualifiers dominate the
+        // raw feed by volume and drown out the matches that matter.
+        api.listMatches(token, 30, "tier1"),
+      ]);
+      // Tier first, rating second: a tier2 team never outranks a tier1 one.
+      t.sort((a, b) => tierRank(a.tier) - tierRank(b.tier) || b.rating - a.rating);
       setTeams(t);
       setMatches(m);
       setLoadError(null);
@@ -48,7 +63,7 @@ export default function Dashboard({ token, onLogout, onSetup2fa }: Props) {
     try {
       const res = await api.runIngestion(token);
       setIngestStatus(
-        `Загружено команд: ${res.teams_ingested}, матчей: ${res.matches_ingested}, рейтингов обновлено: ${res.ratings_updated}`,
+        `Команд: ${res.teams_ingested}, матчей: ${res.matches_ingested} (из них tier 1: ${res.tier1_matches}), рейтингов обновлено: ${res.ratings_updated}`,
       );
       await loadData();
     } catch {
@@ -88,8 +103,9 @@ export default function Dashboard({ token, onLogout, onSetup2fa }: Props) {
       <header>
         <h1>Система прогнозирования матчей — Dota 2</h1>
         <div className="header-actions">
+          {twoFactorEnabled && <span className="badge-ok">2FA включена</span>}
           <button className="secondary" onClick={onSetup2fa}>
-            Настроить 2FA
+            {twoFactorEnabled ? "Пересоздать 2FA" : "Настроить 2FA"}
           </button>
           <button className="secondary" onClick={onLogout}>
             Выйти
@@ -111,6 +127,9 @@ export default function Dashboard({ token, onLogout, onSetup2fa }: Props) {
 
       <section className="panel">
         <h2>Прогноз матча</h2>
+        <p className="hint">
+          Доступны все {teams.length} команд из базы, а не только топ — начните вводить название.
+        </p>
         <form className="predict-form" onSubmit={handlePredict}>
           <TeamAutocomplete
             teams={teams}
@@ -145,13 +164,22 @@ export default function Dashboard({ token, onLogout, onSetup2fa }: Props) {
               />
             </div>
             <p>
-              <strong>{prediction.team_a.name}</strong> победит с вероятностью{" "}
+              <strong>{prediction.team_a.name}</strong>{" "}
+              <span className={`tier-badge ${prediction.team_a.tier}`}>
+                {tierLabel(prediction.team_a.tier)}
+              </span>{" "}
+              победит с вероятностью{" "}
               <strong>{(prediction.team_a_win_prob * 100).toFixed(1)}%</strong> против{" "}
-              <strong>{prediction.team_b.name}</strong>
+              <strong>{prediction.team_b.name}</strong>{" "}
+              <span className={`tier-badge ${prediction.team_b.tier}`}>
+                {tierLabel(prediction.team_b.tier)}
+              </span>
             </p>
             <p className="hint">
               Elo-компонента: {(prediction.elo_component * 100).toFixed(1)}% · форма:{" "}
-              {(prediction.form_component * 100).toFixed(1)}%
+              {(prediction.form_component * 100).toFixed(1)}% · поправка на тир:{" "}
+              {prediction.tier_adjustment > 0 ? "+" : ""}
+              {prediction.tier_adjustment.toFixed(0)} Elo
             </p>
           </div>
         )}
@@ -170,6 +198,7 @@ export default function Dashboard({ token, onLogout, onSetup2fa }: Props) {
               >
                 <span className="rank">{i + 1}</span>
                 <span className="team-name">{t.name}</span>
+                <span className={`tier-badge ${t.tier}`}>{tierLabel(t.tier)}</span>
               </li>
             ))}
           </ul>
@@ -209,7 +238,7 @@ export default function Dashboard({ token, onLogout, onSetup2fa }: Props) {
       </section>
 
       <section className="panel">
-        <h2>Последние матчи</h2>
+        <h2>Последние матчи (Tier 1)</h2>
         <div className="table-scroll">
           <table>
             <thead>

@@ -29,6 +29,31 @@ async function request<T>(
   return res.json() as Promise<T>;
 }
 
+export type Tier = "tier1" | "tier2" | "tier3" | "unknown";
+
+/** Teams are ranked tier-first, so a tier2 team never sits above a tier1 one. */
+export const TIER_RANK: Record<Tier, number> = {
+  tier1: 1,
+  tier2: 2,
+  tier3: 3,
+  unknown: 4,
+};
+
+export const TIER_LABEL: Record<Tier, string> = {
+  tier1: "Tier 1",
+  tier2: "Tier 2",
+  tier3: "Tier 3",
+  unknown: "—",
+};
+
+export function tierRank(tier: string): number {
+  return TIER_RANK[tier as Tier] ?? 4;
+}
+
+export function tierLabel(tier: string): string {
+  return TIER_LABEL[tier as Tier] ?? "—";
+}
+
 export interface Team {
   id: number;
   opendota_team_id: number;
@@ -36,6 +61,7 @@ export interface Team {
   tag: string | null;
   rating: number;
   recent_form: number;
+  tier: string;
 }
 
 export interface Match {
@@ -48,6 +74,7 @@ export interface Match {
   radiant_win: boolean;
   start_time: number;
   league_name: string | null;
+  league_tier: string | null;
 }
 
 export interface LoginResponse {
@@ -56,11 +83,12 @@ export interface LoginResponse {
 }
 
 export interface PredictResponse {
-  team_a: { id: number; name: string };
-  team_b: { id: number; name: string };
+  team_a: { id: number; name: string; tier: string };
+  team_b: { id: number; name: string; tier: string };
   team_a_win_prob: number;
   elo_component: number;
   form_component: number;
+  tier_adjustment: number;
   prediction_id: number;
 }
 
@@ -100,13 +128,16 @@ export const api = {
   enable2fa: (token: string, code: string) =>
     request<{ status: string }>("/auth/2fa/enable", { method: "POST", token, body: { code } }),
 
+  me: (token: string) =>
+    request<{ username: string; totp_enabled: boolean }>("/auth/me", { token }),
+
   listTeams: (token: string) => request<Team[]>("/teams", { token }),
 
   getRoster: (token: string, teamId: number) =>
     request<Roster>(`/teams/${teamId}/roster`, { token }),
 
-  listMatches: (token: string, limit = 30) =>
-    request<Match[]>(`/matches?limit=${limit}`, { token }),
+  listMatches: (token: string, limit = 30, tier?: string) =>
+    request<Match[]>(`/matches?limit=${limit}${tier ? `&tier=${tier}` : ""}`, { token }),
 
   predict: (token: string, teamAId: number, teamBId: number) =>
     request<PredictResponse>("/predict", {
@@ -116,8 +147,12 @@ export const api = {
     }),
 
   runIngestion: (token: string) =>
-    request<{ teams_ingested: number; matches_ingested: number; ratings_updated: number }>(
-      "/ingest/run",
+    request<{
+      teams_ingested: number;
+      matches_ingested: number;
+      tier1_matches: number;
+      ratings_updated: number;
+    }>("/ingest/run",
       { method: "POST", token },
     ),
 };

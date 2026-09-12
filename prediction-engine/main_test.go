@@ -37,6 +37,42 @@ func TestExpectedScoreSymmetric(t *testing.T) {
 	}
 }
 
+func TestTierOffsetOrdersTiers(t *testing.T) {
+	// A stronger tier must never be rated below a weaker one at equal Elo.
+	tiers := []string{"tier1", "tier2", "tier3", "unknown"}
+	for i := 0; i < len(tiers)-1; i++ {
+		stronger, weaker := tierOffset(tiers[i]), tierOffset(tiers[i+1])
+		if stronger <= weaker {
+			t.Errorf("expected %s offset > %s offset, got %v vs %v",
+				tiers[i], tiers[i+1], stronger, weaker)
+		}
+	}
+}
+
+func TestTierLiftsEqualRatedTeam(t *testing.T) {
+	adjustment := tierOffset("tier1") - tierOffset("tier2")
+	withTier := expectedScore(1500+adjustment, 1500)
+	withoutTier := expectedScore(1500, 1500)
+	if withTier <= withoutTier {
+		t.Errorf("expected tier1 to be favoured over an equally rated tier2 team: %v vs %v",
+			withTier, withoutTier)
+	}
+}
+
+func TestFormShrinkDampensCrossTierComparison(t *testing.T) {
+	sameTier := formShrink("tier1", "tier1")
+	oneApart := formShrink("tier1", "tier2")
+	twoApart := formShrink("tier1", "tier3")
+
+	if sameTier != 1.0 {
+		t.Errorf("form within a tier should be compared at full weight, got %v", sameTier)
+	}
+	if !(oneApart < sameTier && twoApart < oneApart) {
+		t.Errorf("form weight should fall as tiers diverge: same=%v one=%v two=%v",
+			sameTier, oneApart, twoApart)
+	}
+}
+
 func TestComputeFormRecentWindow(t *testing.T) {
 	matches := []MatchResult{
 		{RadiantTeamID: 1, DireTeamID: 2, RadiantWin: true, StartTime: 1},

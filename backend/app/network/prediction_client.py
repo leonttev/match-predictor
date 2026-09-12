@@ -25,7 +25,13 @@ class PredictionEngineClient:
             return r.json()
 
     async def predict(
-        self, team_a_rating: float, team_a_form: float, team_b_rating: float, team_b_form: float
+        self,
+        team_a_rating: float,
+        team_a_form: float,
+        team_a_tier: str,
+        team_b_rating: float,
+        team_b_form: float,
+        team_b_tier: str,
     ) -> dict:
         async with self._client() as c:
             r = await c.post(
@@ -33,8 +39,10 @@ class PredictionEngineClient:
                 json={
                     "team_a_rating": team_a_rating,
                     "team_a_form": team_a_form,
+                    "team_a_tier": team_a_tier,
                     "team_b_rating": team_b_rating,
                     "team_b_form": team_b_form,
+                    "team_b_tier": team_b_tier,
                 },
             )
             r.raise_for_status()

@@ -20,6 +20,10 @@ class Team(Base):
     rating: Mapped[float] = mapped_column(Float, default=1500.0)
     seed_rating: Mapped[float] = mapped_column(Float, default=1500.0)
     recent_form: Mapped[float] = mapped_column(Float, default=0.5)
+    # Best league tier this team has been observed playing in ("tier1".."tier3",
+    # or "unknown" when it hasn't appeared in any ingested match). Teams are
+    # ranked tier-first, so a tier2 team never outranks a tier1 one.
+    tier: Mapped[str] = mapped_column(String(10), default="unknown")
 
 
 class Match(Base):
@@ -32,6 +36,8 @@ class Match(Base):
     radiant_win: Mapped[bool] = mapped_column(Boolean)
     start_time: Mapped[int] = mapped_column(BigInteger)
     league_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    league_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    league_tier: Mapped[str | None] = mapped_column(String(10), nullable=True, index=True)
 
 
 class Prediction(Base):

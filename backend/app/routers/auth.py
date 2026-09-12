@@ -68,6 +68,19 @@ async def login(req: LoginRequest):
     return LoginResponse(status="ok", token=security.create_access_token(req.username))
 
 
+@router.get("/me")
+async def me(username: str = Depends(require_full_auth)):
+    """Validates the caller's session and reports whether 2FA is active for
+    the account. The frontend calls this on load: a token in localStorage is
+    not proof the session is still usable (it can be expired, or name a user
+    that no longer exists), and silently landing on a broken dashboard is
+    worse than being sent back to the login screen."""
+    user = await db_client.get_user_by_username(username)
+    if not user:
+        raise HTTPException(401, "user no longer exists — please log in again")
+    return {"username": user["username"], "totp_enabled": user["totp_enabled"]}
+
+
 @router.post("/2fa/setup", response_model=TwoFactorSetupResponse)
 async def setup_2fa(username: str = Depends(require_full_auth)):
     """Generates (but does not yet activate) a TOTP secret for the logged-in user."""

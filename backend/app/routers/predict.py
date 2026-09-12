@@ -24,8 +24,10 @@ async def predict_match(req: PredictRequest, _: str = Depends(require_full_auth)
     result = await prediction_client.predict(
         team_a_rating=team_a["rating"],
         team_a_form=team_a["recent_form"],
+        team_a_tier=team_a["tier"],
         team_b_rating=team_b["rating"],
         team_b_form=team_b["recent_form"],
+        team_b_tier=team_b["tier"],
     )
 
     stored = await db_client.create_prediction(
@@ -37,10 +39,11 @@ async def predict_match(req: PredictRequest, _: str = Depends(require_full_auth)
     )
 
     return {
-        "team_a": {"id": team_a["id"], "name": team_a["name"]},
-        "team_b": {"id": team_b["id"], "name": team_b["name"]},
+        "team_a": {"id": team_a["id"], "name": team_a["name"], "tier": team_a["tier"]},
+        "team_b": {"id": team_b["id"], "name": team_b["name"], "tier": team_b["tier"]},
         "team_a_win_prob": result["team_a_win_prob"],
         "elo_component": result["elo_component"],
         "form_component": result["form_component"],
+        "tier_adjustment": result["tier_adjustment"],
         "prediction_id": stored["id"],
     }

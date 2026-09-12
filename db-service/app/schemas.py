@@ -18,11 +18,17 @@ class TeamOut(TeamIn):
     id: int
     rating: float
     recent_form: float
+    tier: str
 
 
 class TeamRatingUpdate(BaseModel):
     rating: float
     recent_form: float
+    tier: str | None = None
+
+
+class TeamStatsUpdate(TeamRatingUpdate):
+    team_id: int
 
 
 class MatchIn(BaseModel):
@@ -32,6 +38,8 @@ class MatchIn(BaseModel):
     radiant_win: bool
     start_time: int
     league_name: str | None = None
+    league_id: int | None = None
+    league_tier: str | None = None
 
 
 class MatchOut(MatchIn):

@@ -35,6 +35,24 @@ class DbServiceClient:
             r.raise_for_status()
             return r.json()
 
+    async def upsert_teams_bulk(self, teams: list[dict]) -> list[dict]:
+        async with self._client() as c:
+            r = await c.post("/teams/bulk", json=teams)
+            r.raise_for_status()
+            return r.json()
+
+    async def update_teams_stats_bulk(self, updates: list[dict]) -> list[dict]:
+        async with self._client() as c:
+            r = await c.patch("/teams/bulk/stats", json=updates)
+            r.raise_for_status()
+            return r.json()
+
+    async def upsert_matches_bulk(self, matches: list[dict]) -> dict:
+        async with self._client() as c:
+            r = await c.post("/matches/bulk", json=matches)
+            r.raise_for_status()
+            return r.json()
+
     async def list_teams(self) -> list[dict]:
         async with self._client() as c:
             r = await c.get("/teams")
@@ -61,9 +79,12 @@ class DbServiceClient:
             r.raise_for_status()
             return r.json()
 
-    async def list_matches(self, limit: int = 100) -> list[dict]:
+    async def list_matches(self, limit: int = 100, tier: str | None = None) -> list[dict]:
+        params: dict = {"limit": limit}
+        if tier:
+            params["tier"] = tier
         async with self._client() as c:
-            r = await c.get("/matches", params={"limit": limit})
+            r = await c.get("/matches", params=params)
             r.raise_for_status()
             return r.json()
 

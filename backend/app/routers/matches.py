@@ -7,8 +7,13 @@ router = APIRouter(prefix="/matches", tags=["matches"])
 
 
 @router.get("")
-async def list_matches(limit: int = 50, _: str = Depends(require_full_auth)):
-    matches, teams = await db_client.list_matches(limit=limit), await db_client.list_teams()
+async def list_matches(
+    limit: int = 50, tier: str | None = None, _: str = Depends(require_full_auth)
+):
+    matches, teams = (
+        await db_client.list_matches(limit=limit, tier=tier),
+        await db_client.list_teams(),
+    )
     team_names = {t["id"]: t["name"] for t in teams}
 
     return [

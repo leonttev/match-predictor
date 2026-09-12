@@ -81,6 +81,73 @@ def upsert_team(team: schemas.TeamIn, session: Session = Depends(get_session)):
     return row
 
 
+@app.post("/teams/bulk", response_model=list[schemas.TeamOut])
+def upsert_teams_bulk(teams: list[schemas.TeamIn], session: Session = Depends(get_session)):
+    """Upserts many teams in a single transaction.
+
+    Ingestion refreshes hundreds of teams and matches at once; doing that as
+    one HTTP call + one commit per row made a data refresh take tens of
+    seconds and hammered SQLite's write lock.
+    """
+    incoming_ids = [t.opendota_team_id for t in teams]
+    existing_rows = session.scalars(
+        select(models.Team).where(models.Team.opendota_team_id.in_(incoming_ids))
+    ).all()
+    by_opendota_id = {row.opendota_team_id: row for row in existing_rows}
+
+    result: list[models.Team] = []
+    for team in teams:
+        row = by_opendota_id.get(team.opendota_team_id)
+        if row:
+            row.name = team.name
+            row.tag = team.tag
+            if team.seed_rating is not None:
+                row.seed_rating = team.seed_rating
+        else:
+            seed = team.seed_rating if team.seed_rating is not None else 1500.0
+            row = models.Team(
+                opendota_team_id=team.opendota_team_id,
+                name=team.name,
+                tag=team.tag,
+                seed_rating=seed,
+                rating=seed,
+            )
+            session.add(row)
+            by_opendota_id[team.opendota_team_id] = row
+        result.append(row)
+
+    session.commit()
+    for row in result:
+        session.refresh(row)
+    return result
+
+
+@app.patch("/teams/bulk/stats", response_model=list[schemas.TeamOut])
+def update_teams_stats_bulk(
+    updates: list[schemas.TeamStatsUpdate], session: Session = Depends(get_session)
+):
+    rows = session.scalars(
+        select(models.Team).where(models.Team.id.in_([u.team_id for u in updates]))
+    ).all()
+    by_id = {row.id: row for row in rows}
+
+    updated: list[models.Team] = []
+    for update in updates:
+        row = by_id.get(update.team_id)
+        if not row:
+            continue
+        row.rating = update.rating
+        row.recent_form = update.recent_form
+        if update.tier is not None:
+            row.tier = update.tier
+        updated.append(row)
+
+    session.commit()
+    for row in updated:
+        session.refresh(row)
+    return updated
+
+
 @app.get("/teams", response_model=list[schemas.TeamOut])
 def list_teams(session: Session = Depends(get_session)):
     result = session.scalars(select(models.Team).order_by(models.Team.name))
@@ -104,6 +171,8 @@ def update_team_rating(
         raise HTTPException(404, "team not found")
     row.rating = update.rating
     row.recent_form = update.recent_form
+    if update.tier is not None:
+        row.tier = update.tier
     session.commit()
     session.refresh(row)
     return row
@@ -131,11 +200,39 @@ def upsert_match(match: schemas.MatchIn, session: Session = Depends(get_session)
     return row
 
 
+@app.post("/matches/bulk", response_model=dict)
+def upsert_matches_bulk(matches: list[schemas.MatchIn], session: Session = Depends(get_session)):
+    """Upserts many matches in a single transaction (see upsert_teams_bulk)."""
+    incoming_ids = [m.opendota_match_id for m in matches]
+    existing_rows = session.scalars(
+        select(models.Match).where(models.Match.opendota_match_id.in_(incoming_ids))
+    ).all()
+    by_match_id = {row.opendota_match_id: row for row in existing_rows}
+
+    created = 0
+    for match in matches:
+        row = by_match_id.get(match.opendota_match_id)
+        if row:
+            for field, value in match.model_dump().items():
+                setattr(row, field, value)
+        else:
+            row = models.Match(**match.model_dump())
+            session.add(row)
+            by_match_id[match.opendota_match_id] = row
+            created += 1
+
+    session.commit()
+    return {"received": len(matches), "created": created}
+
+
 @app.get("/matches", response_model=list[schemas.MatchOut])
-def list_matches(limit: int = 100, session: Session = Depends(get_session)):
-    result = session.scalars(
-        select(models.Match).order_by(models.Match.start_time.desc()).limit(limit)
-    )
+def list_matches(
+    limit: int = 100, tier: str | None = None, session: Session = Depends(get_session)
+):
+    query = select(models.Match)
+    if tier:
+        query = query.where(models.Match.league_tier == tier)
+    result = session.scalars(query.order_by(models.Match.start_time.desc()).limit(limit))
     return list(result.all())
 
 

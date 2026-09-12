@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { Team } from "../api/client";
+import { tierLabel, type Team } from "../api/client";
 
 interface Props {
   teams: Team[];
@@ -8,7 +8,7 @@ interface Props {
   onChange: (query: string, teamId: number | "") => void;
 }
 
-const MAX_SUGGESTIONS = 8;
+const MAX_SUGGESTIONS = 12;
 
 export default function TeamAutocomplete({ teams, placeholder, value, onChange }: Props) {
   const [open, setOpen] = useState(false);
@@ -53,7 +53,8 @@ export default function TeamAutocomplete({ teams, placeholder, value, onChange }
         <ul className="autocomplete-list">
           {suggestions.map((t) => (
             <li key={t.id} onMouseDown={() => selectTeam(t)}>
-              {t.name}
+              <span>{t.name}</span>
+              <span className={`tier-badge ${t.tier}`}>{tierLabel(t.tier)}</span>
             </li>
           ))}
         </ul>
