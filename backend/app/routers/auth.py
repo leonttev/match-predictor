@@ -72,6 +72,11 @@ async def login(req: LoginRequest):
 async def setup_2fa(username: str = Depends(require_full_auth)):
     """Generates (but does not yet activate) a TOTP secret for the logged-in user."""
     user = await db_client.get_user_by_username(username)
+    if not user:
+        # A structurally valid JWT doesn't guarantee the user it names still
+        # exists (deleted account, or — in dev — a DB reset since the token
+        # was issued). Fail cleanly instead of crashing on user["id"] below.
+        raise HTTPException(401, "user no longer exists — please log in again")
     secret = security.new_totp_secret()
     await db_client.update_user_totp(user["id"], totp_secret=secret, totp_enabled=False)
     return TwoFactorSetupResponse(
@@ -83,6 +88,8 @@ async def setup_2fa(username: str = Depends(require_full_auth)):
 async def enable_2fa(req: TwoFactorVerifyRequest, username: str = Depends(require_full_auth)):
     """Confirms the user can produce a valid code before turning 2FA on."""
     user = await db_client.get_user_by_username(username)
+    if not user:
+        raise HTTPException(401, "user no longer exists — please log in again")
     if not user["totp_secret"]:
         raise HTTPException(400, "call /auth/2fa/setup first")
     if not security.verify_totp(user["totp_secret"], req.code):

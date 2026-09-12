@@ -16,10 +16,15 @@ export default function TwoFactorSetup({ token, onEnabled, onSkip }: Props) {
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    api.setup2fa(token).then(async (res) => {
-      setSecret(res.secret);
-      setQrDataUrl(await QRCode.toDataURL(res.provisioning_uri));
-    });
+    api
+      .setup2fa(token)
+      .then(async (res) => {
+        setSecret(res.secret);
+        setQrDataUrl(await QRCode.toDataURL(res.provisioning_uri));
+      })
+      .catch(() => {
+        setError("Не удалось начать настройку 2FA — выйдите и войдите заново.");
+      });
   }, [token]);
 
   async function handleEnable(e: React.FormEvent) {

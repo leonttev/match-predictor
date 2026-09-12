@@ -158,10 +158,10 @@ export default function Dashboard({ token, onLogout, onSetup2fa }: Props) {
       </section>
 
       <section className="panel">
-        <h2>Топ-5 команд</h2>
+        <h2>Топ-10 команд</h2>
         <div className="top-teams-layout">
           <ul className="top-teams-list">
-            {teams.slice(0, 5).map((t, i) => (
+            {teams.slice(0, 10).map((t, i) => (
               <li
                 key={t.id}
                 className={rosterTeamId === t.id ? "active" : ""}
@@ -170,7 +170,6 @@ export default function Dashboard({ token, onLogout, onSetup2fa }: Props) {
               >
                 <span className="rank">{i + 1}</span>
                 <span className="team-name">{t.name}</span>
-                <span className="hint">форма {Math.round(t.recent_form * 100)}%</span>
               </li>
             ))}
           </ul>
